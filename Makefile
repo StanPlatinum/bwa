@@ -24,7 +24,9 @@ endif
 .c.o:
 		$(CC) -c $(CFLAGS) $(DFLAGS) $(INCLUDES) $< -o $@
 
-all:$(PROG)
+#########################################################################
+
+all:$(PROG) pal_loader bwa.manifest.sgx bwa.token
 
 bwa:libbwa.a $(AOBJS) main.o
 		$(CC) $(CFLAGS) $(DFLAGS) $(AOBJS) main.o -o $@ -L. -lbwa $(LIBS)
@@ -35,7 +37,7 @@ bwamem-lite:libbwa.a example.o
 libbwa.a:$(LOBJS)
 		$(AR) -csru $@ $(LOBJS)
 
-clean:
+clean-bwa:
 		rm -f gmon.out *.o a.out $(PROG) *~ *.a
 
 depend:
@@ -86,3 +88,47 @@ pemerge.o: ksw.h kseq.h malloc_wrap.h kstring.h bwa.h bntseq.h bwt.h utils.h
 rle.o: rle.h
 rope.o: rle.h rope.h
 utils.o: utils.h ksort.h malloc_wrap.h kseq.h
+
+#########################################################################
+
+THIS_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+
+
+# Relative path to Graphene root
+GRAPHENEDIR ?= $(THIS_DIR)../..
+SGX_SIGNER_KEY ?= $(GRAPHENEDIR)/Pal/src/host/Linux-SGX/signer/enclave-key.pem
+
+
+# Generate the SGX-specific manifest (ssl_server.manifest.sgx), the enclave signature, and the token
+# for enclave initialization.
+bwa.manifest.sgx: bwa.manifest
+	$(GRAPHENEDIR)/Pal/src/host/Linux-SGX/signer/pal-sgx-sign \
+		-libpal $(GRAPHENEDIR)/Runtime/libpal-Linux-SGX.so \
+		-key $(SGX_SIGNER_KEY) \
+		-manifest $< -output $@
+
+bwa.sig: bwa.manifest.sgx
+
+bwa.token: bwa.sig
+	$(GRAPHENEDIR)/Pal/src/host/Linux-SGX/signer/pal-sgx-get-token \
+		-output $@ -sig $^
+
+# Extra executables
+pal_loader:
+	ln -s $(GRAPHENEDIR)/Runtime/pal_loader $@
+
+run-nonsgx:
+	./bwa mem data/genome.fa data/ecoli.4k.fastq
+
+run-sgx:
+	SGX=1 ./pal_loader bwa.manifest mem data/genome.fa data/ecoli.4k.fastq
+
+.PHONY: clean-bwa clean-sgx clean-data clean-all
+
+clean-data:
+	$(RM) data/genome.fa.*
+
+clean-sgx:
+	$(RM) *.manifest.sgx *.token *.sig pal_loader
+
+clean-all: clean-bwa clean-data clean-sgx
